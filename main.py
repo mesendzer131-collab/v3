@@ -61,7 +61,7 @@ def logi(tag: str, msg: str): log.info(f"[{tag}] {msg}")
 def logw(tag: str, msg: str): log.warning(f"[{tag}] {msg}")
 def loge(tag: str, msg: str): log.error(f"[{tag}] {msg}")
 
-BOT_TOKEN = "8858046564:AAE3mBBtxvbPnUlpV586Z9y6cLbnR46YbCE"
+BOT_TOKEN = "8858046564:AAFjxsGfwL-L114sJhuKuyBrK7DaarXroQw"
 OWNER_ID = 8944641597
 API_KEY = "frhyfryvrjjcrjvr"
 API_ID = 35895947
